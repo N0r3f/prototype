@@ -1,6 +1,6 @@
 import React from 'react';
 import { Heart, Clock } from 'lucide-react';
-import { useGameStore } from '../store/gameStore';
+import { useGameStore } from '../store/GameStore';
 import { useGameTimer } from '../hooks/useGameTimer';
 import { ProfileEditor } from './ProfileEditor';
 import { cn } from '../utils/cn';
