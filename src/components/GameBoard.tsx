@@ -1,5 +1,5 @@
 import React from 'react';
-import { useGameStore } from '../store/GameStore';
+import { useGameStore } from '../store/gameStore';
 import { UnitColumn } from './UnitColumn';
 import { Suit } from '../types/game';
 import { canActivateColumn } from '../utils/gameLogic';
