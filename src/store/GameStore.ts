@@ -3,12 +3,15 @@ import { create } from "zustand"; // Zustand est utilisé pour la gestion d'éta
 import { Card, Player, Phase, Suit, ColumnState, initialAttackButtons } from "../types/game";
 import { Card as CardType } from "../types/game";
 import { createDeck, drawCards, shuffleDeck } from "../utils/deck";
+import { t } from "i18next";
+import { AudioManager } from "../sound-design/audioManager";
 import { handleCardPlacement, handleJokerAction as handleJokerEffect, distributeCards } from "../utils/gameLogic";
 import i18next from "i18next"; // Importez i18next directement
 import i18n from "../i18n/config";
 import { createColumnActions } from "./slices/columnActions";
 import { createRevolutionActions } from "./slices/revolutionActions";
-import { AudioManager } from "../sound-design/audioManager";
+import { createSacrificeActions } from "./slices/sacrificeActions";
+import { createKingDefenseActions } from "./slices/kingDefense"; // Importer les actions du Roi
 
 // Au début du fichier, après les autres imports
 const t = (key: string) => i18next.t(key);
@@ -20,6 +23,7 @@ interface GameState {
   phase: Phase; // Phase actuelle du jeu
   turn: number; // Numéro du tour
   selectedCards: Card[]; // Cartes sélectionnées
+  selectedSacrificeCards: Card[];
   columns: Record<Suit, ColumnState>; // État des colonnes par couleur
   hasDiscarded: boolean; // Indique si le joueur a défaussé
   hasDrawn: boolean; // Indique si le joueur a pioché
@@ -45,6 +49,8 @@ interface GameState {
   blockableColumns: number[];
   canBlock: boolean;
   blockedColumns: number[]; // Indices des colonnes qui ont été bloquées
+  showSacrificePopup: boolean;
+  sacrificeInfo: null;
 }
 
 // Ajout du type pour le store complet
@@ -78,6 +84,8 @@ export interface GameStore extends GameState {
   resetBlockedColumns: () => void;
   handleDestroyColumn: (columnIndex: number) => void;
   handleRevolution: () => void;
+  handleSacrifice: (suit: Suit, specialCard: Card) => void;
+  setSelectedSacrificeCards: (cards: Card[]) => void;
 }
 
 // Création du store avec Zustand
@@ -97,6 +105,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       epithet: "Maître des Cartes",
     },
   },
+  selectedSacrificeCards: [],
   deck: [],
   phase: "setup" as Phase,
   turn: 1,
@@ -169,8 +178,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   blockableColumns: [],
   canBlock: false,
   blockedColumns: [],
+  showSacrificePopup: false,
+  sacrificeInfo: null,
   ...createColumnActions(set),
-  ...createRevolutionActions(set),
+  ...createRevolutionActions(set, get),
+  ...createSacrificeActions(set, get),
+  ...createKingDefenseActions(set, get), // Intégrer les actions du Roi
 
   initializeGame: () => {
     // Création et mélange du deck complet
@@ -289,6 +302,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       let updatedPlayer = { ...state.currentPlayer };
 
       if (action === "heal") {
+        // Jouer le son de soin
+        AudioManager.getInstance().playHealSound();
+
         // Augmente les PV max et actuels de 3
         const newHealth = updatedPlayer.health + 3;
         updatedPlayer.maxHealth = newHealth;
@@ -355,6 +371,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           message: t("game.messages.actionPhase"),
         };
       }
+
+      // Jouer le son de pioche
+      AudioManager.getInstance().playDrawSound();
 
       // Piocher les cartes nécessaires
       const [newDeck, drawnCards] = drawCards(state.deck, cardsNeeded);
@@ -555,6 +574,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     // Récupère les cartes de la défausse pour remplir le deck
     set((state) => {
       if (state.deck.length > 0 || state.currentPlayer.discardPile.length === 0) return state;
+
+      // Jouer le son de mélange
+      AudioManager.getInstance().playShuffleSound();
 
       const newDeck = shuffleDeck([...state.currentPlayer.discardPile]);
 
@@ -771,6 +793,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return state;
       }
 
+      // Jouer le son de mélange
+      AudioManager.getInstance().playShuffleSound();
+
       const allDiscardedCards = [...state.currentPlayer.hand, ...state.currentPlayer.discardPile];
       const allCards = [...state.deck, ...allDiscardedCards];
       const newDeck = shuffleDeck(allCards);
@@ -845,6 +870,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return state;
       }
 
+      // Jouer le son de mélange
+      AudioManager.getInstance().playShuffleSound();
+
       const allCards = [...state.deck, ...state.currentPlayer.discardPile];
       const newDeck = shuffleDeck(allCards);
       const [remainingDeck, newHand] = drawCards(newDeck, 5);
@@ -890,8 +918,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return state;
       }
 
+      // Vérifier si une attaque a été effectuée ce tour
+      if (state.hasPlayedAction) {
+        return {
+          ...state,
+          selectedCards: [],
+          message: t("game.messages.cannotPlayAfterAction"),
+        };
+      }
+
       // Handle placing a 7 from reserve suit to column
       if (reserveSuitCard?.value === "7" && reserveSuitCard.suit === suit && position === 6) {
+        // Jouer le son de carte
+        AudioManager.getInstance().playCardSound();
         return {
           ...state,
           hasPlayedAction: true,
@@ -913,6 +952,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Handle placing a 7 from hand/reserve to reserve suit
       const selectedCard = state.selectedCards.find((card) => card.value === "7" || card.type === "joker");
       if (selectedCard && position === 6) {
+        // Jouer le son de carte
+        AudioManager.getInstance().playCardSound();
         const updatedColumns = {
           ...state.columns,
           [suit]: {
@@ -963,6 +1004,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
           // Pour les têtes, on vérifie uniquement la couleur, pas l'activation
           if (faceCard?.suit === suit) {
+            // Jouer le son de carte
+            AudioManager.getInstance().playCardSound();
             const newHand = state.currentPlayer.hand.filter(
               (card) => !state.selectedCards.some((selected) => selected.id === card.id)
             );
@@ -1004,6 +1047,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           const activator = state.selectedCards.find((card) => card.type === "joker" || card.value === "7");
 
           if (ace?.suit === suit && (column.cards.length === 0 || !column.hasLuckyCard)) {
+            // Jouer le son de carte
+            AudioManager.getInstance().playCardSound();
             // Réinitialiser le blocage pour cette colonne car c'est un nouveau cycle
             const newBlockedColumns = state.blockedColumns.filter((i) => {
               const columnSuit = Object.keys(state.columns)[i];
@@ -1066,6 +1111,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
             };
           }
 
+          // Jouer le son de carte
+          AudioManager.getInstance().playCardSound();
           // Placement dans reserveSuit uniquement pour 7 et Joker
           const newHand = state.currentPlayer.hand.filter((c) => c.id !== card.id);
           const newReserve = state.currentPlayer.reserve.filter((c) => c.id !== card.id);
@@ -1109,6 +1156,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           return state;
         }
 
+        // Jouer le son de carte
+        AudioManager.getInstance().playCardSound();
         // Placement normal dans la séquence
         const newHand = state.currentPlayer.hand.filter((c) => c.id !== card.id);
         const newReserve = state.currentPlayer.reserve.filter((c) => c.id !== card.id);
@@ -1155,6 +1204,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           const healAmount = activator?.type === "joker" ? 4 : 2;
           const newMaxHealth = state.currentPlayer.maxHealth + healAmount;
 
+          // Jouer le son de soin
+          AudioManager.getInstance().playHealSound();
+
           return {
             ...state,
             currentPlayer: {
@@ -1176,15 +1228,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         }
       }
 
-      // Si la colonne est complète, on active le blocage
-      // if (newColumn.cards.length === 7) {
-      //   set((state) => ({
-      //     ...state,
-      //     blockableColumns: [...state.blockableColumns, position],
-      //     canBlock: true,
-      //   }));
-      // }
-
       return state;
     });
   },
@@ -1205,6 +1248,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const newReserve = state.currentPlayer.reserve.filter(
         (card) => !state.selectedCards.some((selected) => selected.id === card.id)
       );
+
+      // Jouer le son de soin
+      AudioManager.getInstance().playHealSound();
 
       return {
         ...state,
@@ -1280,6 +1326,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set((state) => {
       if (state.phase !== "action" || state.hasPlayedAction) return state;
 
+      // Vérifier d'abord si un Roi bloque l'attaque
+      const isKingInvolved = get().handleAttackWithKing(clickedAttackCard, clickedAttackCard.suit);
+      if (isKingInvolved) {
+        return state; // L'attaque a été gérée par la logique du Roi
+      }
+
+      // Si aucun Roi n'est impliqué, continuer avec la logique d'attaque normale
       const currentSuit = clickedAttackCard.suit;
 
       // Trouver le bouton cliqué
@@ -1433,4 +1486,5 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return "";
     }
   },
+  setSelectedSacrificeCards: (cards: Card[]) => set({ selectedSacrificeCards: cards }),
 }));
